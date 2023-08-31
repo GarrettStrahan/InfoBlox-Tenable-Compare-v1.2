@@ -1,0 +1,14 @@
+TenableSC:
+  user: ITASKER
+  rco:
+    accessKey: 3063f7803f8e40efafd4c410fea8c981
+    secretKey: 2ee9e2f03a324232825cff49c44bb339
+  ofl:
+    accessKey: cdfc5ce1a56549c08a6c11c2022830ad
+    secretKey: 28b3bc90a8a44c16ae0e86c95f322ae4
+  buf:
+    accessKey: d578342f85f04650833f112f7939a8bf
+    secretKey: 1381d557f2de469f9eaf706e089d0e14
+  wlc:
+    accessKey: 7de03f65df32429e987e8b2848de2e7e
+    secretKey: e5ca96c67fc34238bd1fdfa0ad638d6b
