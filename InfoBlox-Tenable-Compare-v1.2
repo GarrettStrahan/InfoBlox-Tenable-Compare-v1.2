@@ -1,0 +1,900 @@
+#    InfoBlox-Tenable-Compare-v1.2
+import requests
+import urllib3
+import datetime as dt
+import re
+import json
+import os
+import yaml
+import sys
+import datetime as dt
+from tenable.sc import TenableSC
+import xlsxwriter
+from scandatafunctions import *
+
+print("You are running InfoBlox RW Tenable Compare v1.2 program")
+
+
+url = "https://ipam.companyx.com/wapi/v2.11.5/network?_max_results=100000" #URL for IPAM network gives 10000 results if it can, #CHANGE THIS URL TO YOUR WORKING INFOBLOX URL!!
+
+requests.packages.urllib3.disable_warnings() #this is stop the warning when you use requests to Infoblox
+
+gm_user = 'tvm-ro' #InfoBlox User account with APIs
+gm_pwd = ":Ij'%W%.35DkMzlKOv0j" #find the password in the CyberArk.
+
+print("\n")
+
+print(f"The Response that was sent to InfoBlox was {url}")
+
+response = requests.get(url, verify=False, auth=(gm_user, gm_pwd)) #This will request data from the Infoblox server.
+
+print(f"Primary Response message = {response}") #This prints out the Response Code #
+
+print(f"Secondary Method of information: {response.text.encode('utf8')}") #This prints out the Response Data
+
+def make_timestamp() -> str:
+    """
+    Generates a TenableSC friendly string for the start date/time of a scan.
+    Date is variable, time time is always 10PM Central.
+    :return: Date/Time string.
+    """
+    return f"TZID=America/Chicago:{dt.datetime.today().strftime('%Y.%m.%d.')}T220000" #Centene HQ is in MO so we are using Chicago instead of EST
+
+
+current_time = make_timestamp()
+
+f = open('InfoBlox Response Data.txt', 'w')
+f.write("Here is the Results from InfoBlox IPAM: \n")
+f.write(f"{response.text.encode('utf8')} \n")
+f.write(f"This information was generated at {current_time} \n")
+f.close()
+
+with open('InfoBlox Response Data.txt') as f: #This takes the data from the file that is generated from Infoblox Project - Writer.py
+    lines = f.readlines()
+
+del lines[0] #This is just taking out stuff, thats not needed
+del lines[1] #This is just taking out stuff, thats not needed
+
+def makenewlistwithip(lines) -> list:
+    newstring = lines[0]
+    ipaddrezz = newstring.split("\\n")
+    print(f"ipaddrezz = {ipaddrezz}")
+    print(f"ipaddrezz length = ", len(ipaddrezz))
+    print(f"ipadrezz is type ", type(ipaddrezz))
+    return ipaddrezz
+
+
+ipaddrezz = makenewlistwithip(lines)
+
+#pattern = re.compile(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') #IP address RegEx, not needed right now
+pattern = re.compile(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[\/]\d\d') #CIDR notation RegEx THIS WORKS
+
+CIDR_matches=[]
+for line in ipaddrezz: #this loop is using regular expression to go through the long list that Infoblox generates
+    CIDR_matches.append(pattern.search(line))
+
+#print(CIDR_matches) # displaying the extracted IP addresses
+
+notemptylist = []
+
+for CIDR_matches_new in CIDR_matches: #this loop just removes all the empty elements of the list with data of None
+    if CIDR_matches_new != None :
+        notemptylist.append(str(CIDR_matches_new))
+
+newstring = "test"
+newlist = []
+
+x = 0
+for templist in notemptylist: #this new
+    newstring = notemptylist[x] #this is just a placeholder variable so we can work with the data to take the CIDR notation
+    txt = newstring.split("'") #this is splitting each element of the IPAM infoblox list with all the garbage into multiple words as a list for txt variable for the point of taking the element that has the IP notitation data which is the 2nd element [1]
+    newlist.append(txt[1]) #this adds the good IP data to a empty list: newlist
+    x = x + 1
+
+#print(newlist) #this is the list of All the IPAM CIDR Notations that InfoBlox has.
+
+with open('Infoblox_IPAM_CIDR_LIST.txt', 'w') as f: #this loop is writing the variablelist: newlist which has the IPAM IP information into a text document.
+    for item in newlist:
+        f.write("%s\n" % item)
+
+
+print("\nEnd of Infoblox data extraction. Infoblox_IPAM_CIDR_LIST.txt File was created. Have a Good Day!") #Program ending information.
+
+
+
+
+"""
+The section's method with Tenable sets the global variables, reads the configuration file, and then gathers information from the 4 tenable servers (RCO, OFL, BUF, WLC) and processes this information like Scanner names, scan zone area names, IP addresses in the scan zone areas. It then outputs this information in a text file.
+
+:return: None
+"""
+
+print("Tenable data extraction, starting!") #lets the user know when its done with the InfoBlox and moving to Tenable
+
+global user, rco_sc, ofl_sc
+
+    # Read the configuration file to load exceptions derived from Confluence ITASK Issue Tracker, and API keys.
+
+with open("config.yml", 'r') as config:
+    cfg = yaml.load(config, Loader=yaml.FullLoader)
+    user = cfg['TenableSC']['user']
+    rco_access_key = cfg['TenableSC']['rco']['accessKey']
+    rco_secret_key = cfg['TenableSC']['rco']['secretKey']
+    ofl_access_key = cfg['TenableSC']['ofl']['accessKey']
+    ofl_secret_key = cfg['TenableSC']['ofl']['secretKey']
+    buf_access_key = cfg['TenableSC']['buf']['accessKey']
+    buf_secret_key = cfg['TenableSC']['buf']['secretKey']
+    wlc_access_key = cfg['TenableSC']['wlc']['accessKey']
+    wlc_secret_key = cfg['TenableSC']['wlc']['secretKey']
+#If you wish to remove scanning a tier just uncomment it above and below.
+
+    #Authenticate with Tenable.SC consoles
+rco_sc = TenableSC('cncpxtena1100.centene.com', access_key=rco_access_key, secret_key=rco_secret_key)
+ofl_sc = TenableSC('cncpxtena1200.centene.com', access_key=ofl_access_key, secret_key=ofl_secret_key)
+buf_sc = TenableSC('cncpxtena1300.centene.com', access_key=buf_access_key, secret_key=buf_secret_key)
+wlc_sc = TenableSC('10.140.61.98', access_key=wlc_access_key, secret_key=wlc_secret_key)
+
+'''
+    Variable list:
+    xxx_scr = Scanner Name List
+    xxx_ids = Scanner ID #
+    xxx_szid = Scanner's Scan Zone Area ID #
+    xxx_scz = Scan Zone Area Names
+    xxx_ip_List = IP count for a specific Scan Zone Area
+    xxx_xxx_number = level 2 - 6 Extra Scan Zone Area example: xxx_scz_4 = Scanner Zone Name List for level 4
+'''
+
+    #RCO Section, this gets all the data from the RCO tenable server
+rco_scr = get_scanner_list_names(rco_sc)  #Gets the scanner dictionary data names from RCO and puts it into rco_scr
+rco_ids = get_scanner_id(rco_sc) #Get the list of scanner ID #s and uses them to get all  the scanner's Scan zone areas
+rco_szid = get_scanner_zone_id(rco_sc, rco_ids) #Gets all the scanners Scan Zone IDs
+rco_scz = turn_scanner_id_2_scan_zone(rco_sc, rco_ids) #This takes the list of scanner #s from RCO and gets scan zone names
+rco_szid_2 = get_all_2nd_scanzone_ids(rco_sc, rco_ids)
+rco_scz_2 = get_extra_scanzone_names(rco_sc, rco_szid_2)  #Get The scan zone names on the 2nd set of Scan Zone per Scanner
+rco_szid_3 = get_all_3rd_scanzone_ids(rco_sc, rco_ids)
+rco_scz_3 = get_extra_scanzone_names(rco_sc, rco_szid_3)  #Get The scan zone names on the 3rd set of Scan Zone per Scanner
+rco_szid_4 = get_all_4th_scanzone_ids(rco_sc, rco_ids)
+rco_scz_4 = get_extra_scanzone_names(rco_sc, rco_szid_4)  #Get The scan zone names on the 4th set of Scan Zone per Scanner
+rco_szid_5 = get_all_5th_scanzone_ids(rco_sc, rco_ids)
+rco_scz_5 = get_extra_scanzone_names(rco_sc, rco_szid_5)  #Get The scan zone names on the 5th set of Scan Zone per Scanner
+rco_szid_6 = get_all_6th_scanzone_ids(rco_sc, rco_ids)
+rco_scz_6 = get_extra_scanzone_names(rco_sc, rco_szid_6)  #GET The scan zone names on the 6th set of Scan Zone per Scanner
+
+    #OFL SECTION, this gets all the data from the OFL tenable server. Remember this one does not play nicely with the other servers and needs its own function calls.
+ofl_scr = get_scanner_list_names(ofl_sc) #Gets the scanner dictionary data names from OFL and puts it into rco_scr
+ofl_ids = get_scanner_id(ofl_sc) #Get the list of scanner ID #s and uses them to get all  the scanner's Scan zone areas
+ofl_szid = ofl_get_scanner_zone_id(ofl_sc, ofl_ids) #Gets all the OFL scanners Scan Zone IDs
+ofl_scz = ofl_turn_scanner_id_2_scan_zone(ofl_sc, ofl_ids) #This function is only for OFL, this takes the list of scanner #s from OFL and gets scan zone names
+ofl_szid_2 = get_all_2nd_scanzone_ids(ofl_sc, ofl_ids)
+ofl_scz_2 = get_extra_scanzone_names(ofl_sc, ofl_szid_2) #GET The scan zone names on the 2nd set of Scan Zone per Scanner
+ofl_szid_3 = get_all_3rd_scanzone_ids(ofl_sc, ofl_ids)
+ofl_scz_3 = get_extra_scanzone_names(ofl_sc, ofl_szid_3) #GET The scan zone names on the 3rd set of Scan Zone per Scanner
+ofl_szid_4 = get_all_4th_scanzone_ids(ofl_sc, ofl_ids)
+ofl_scz_4 = get_extra_scanzone_names(ofl_sc, ofl_szid_4) #GET The scan zone names on the 4th set of Scan Zone per Scanner
+ofl_szid_5 = get_all_5th_scanzone_ids(ofl_sc, ofl_ids)
+ofl_scz_5 = get_extra_scanzone_names(ofl_sc, ofl_szid_5) #GET The scan zone names on the 5th set of Scan Zone per Scanner
+ofl_szid_6 = get_all_6th_scanzone_ids(ofl_sc, ofl_ids)
+ofl_scz_6 = get_extra_scanzone_names(ofl_sc, ofl_szid_6) #GET The scan zone names on the 6th set of Scan Zone per Scanner
+
+    #BUF SECTION, this gets all the data from the BUF tenable server
+buf_scr = get_scanner_list_names(buf_sc)  #Gets the scanner dictionary data names from BUF and puts it into buf_scr
+buf_ids = get_scanner_id(buf_sc) #Get the list of scanner ID #s and uses them to get all the scanner's Scan zone areas
+buf_szid = get_scanner_zone_id(buf_sc, buf_ids) #Gets all the BUF scanners Scan Zone IDs
+buf_scz = turn_scanner_id_2_scan_zone(buf_sc, buf_ids)
+buf_szid_2 = get_all_2nd_scanzone_ids(buf_sc, buf_ids)
+buf_scz_2 = get_extra_scanzone_names(buf_sc, buf_szid_2)
+buf_szid_3 = get_all_3rd_scanzone_ids(buf_sc, buf_ids)
+buf_scz_3 = get_extra_scanzone_names(buf_sc, buf_szid_3)
+buf_szid_4 = get_all_4th_scanzone_ids(buf_sc, buf_ids)
+buf_scz_4 = get_extra_scanzone_names(buf_sc, buf_szid_4)
+buf_szid_5 = get_all_5th_scanzone_ids(buf_sc, buf_ids)
+buf_scz_5 = get_extra_scanzone_names(buf_sc, buf_szid_5)
+buf_szid_6 = get_all_6th_scanzone_ids(buf_sc, buf_ids)
+buf_scz_6 = get_extra_scanzone_names(buf_sc, buf_szid_6)
+
+    #WLC SECTION, this gets all the data from the RCO tenable server
+wlc_scr = get_scanner_list_names(wlc_sc)
+wlc_ids = get_scanner_id(wlc_sc)
+#wlc_szid = get_scanner_zone_id(wlc_sc, wlc_ids)  #This one was crashing, using above line
+wlc_szid = ofl_get_scanner_zone_id(wlc_sc, wlc_ids)
+wlc_scz = ofl_turn_scanner_id_2_scan_zone(wlc_sc, wlc_ids)
+#wlc_scz = turn_scanner_id_2_scan_zone(wlc_sc, wlc_ids) #this one was crashing, using above line
+wlc_szid_2 = get_all_2nd_scanzone_ids(wlc_sc, wlc_ids)
+wlc_scz_2 = get_extra_scanzone_names(wlc_sc, wlc_szid_2)
+wlc_szid_3 = get_all_3rd_scanzone_ids(wlc_sc, wlc_ids)
+wlc_scz_3 = get_extra_scanzone_names(wlc_sc, wlc_szid_3)
+wlc_szid_4 = get_all_4th_scanzone_ids(wlc_sc, wlc_ids)
+wlc_scz_4 = get_extra_scanzone_names(wlc_sc, wlc_szid_4)
+wlc_szid_5 = get_all_5th_scanzone_ids(wlc_sc, wlc_ids)
+wlc_scz_5 = get_extra_scanzone_names(wlc_sc, wlc_szid_5)
+wlc_szid_6 = get_all_6th_scanzone_ids(wlc_sc, wlc_ids)
+wlc_scz_6 = get_extra_scanzone_names(wlc_sc, wlc_szid_6)
+
+#OFL Section  #Without this you wont get an accurate Tier Tab
+tier_number = len(ofl_scr) # =counting how many OFL fields to add with the scannerlistnames (ofl_scr)
+ofl_tier_name = []
+ofl = ["OFL"]
+while tier_number != 0:
+    #ofl_tier_name = ofl_tier_name + ofl
+    ofl_tier_name.append("OFL") #need to keep adding OFL to the list until 0
+    tier_number = tier_number - 1
+
+size = len(ofl_tier_name)
+
+#WLC Section
+tier_number = len(wlc_scr) # =counting how many WLC fields to add with the scannerlistnames (wlc_scr)
+wlc = ["WLC"]
+while tier_number != 0:
+    # ofl_tier_name = ofl_tier_name + wlc
+    ofl_tier_name.insert(size, "WLC") #need to keep adding WLC to the list until 0
+    tier_number = tier_number - 1
+
+size = len(ofl_tier_name)
+
+#RCO section
+tier_number = len(rco_scr) # =counting how many BUF fields to add with the scannerlistnames (rco_scr)
+rco = ["RCO"]
+while tier_number != 0:
+    #ofl_tier_name = ofl_tier_name + rco
+    ofl_tier_name.insert(size, "RCO")  # need to keep adding BUF to the list until 0
+    tier_number = tier_number - 1
+
+size = len(ofl_tier_name)
+
+#BUF Section
+tier_number = len(buf_scr) # =counting how many BUF fields to add with the scannerlistnames (wlc_scr)
+buf = ["BUF"]
+while tier_number != 0:
+    #        ofl_tier_name = ofl_tier_name + buf
+    ofl_tier_name.insert(size, "BUF")  # need to keep adding BUF to the list until 0
+    tier_number = tier_number - 1
+
+    #Scanzone_ID #2 totals
+ofl_szid_2.append(wlc_szid_2)
+ofl_szid_2.append(rco_szid_2) #should have no results. This is fine.
+ofl_szid_2.append(buf_szid_2)
+
+    # Scanzone_ID #3 totals
+ofl_szid_3.append(wlc_szid_3)
+ofl_szid_3.append(rco_szid_3) #should have no results. This is fine.
+ofl_szid_3.append(buf_szid_3)
+
+    # Scanzone_ID #4 totals
+ofl_szid_4.append(wlc_szid_4)
+ofl_szid_4.append(rco_szid_4) #there is no scan zone of this type in this tier, doing it anyways
+ofl_szid_4.append(buf_szid_4)  #there is no scan zone of this type in this tier, doing it anyways
+
+    # Scanzone_ID #5 totals
+ofl_szid_5.append(wlc_szid_5) #there is no scan zone of this type in this tier, doing it anyways
+ofl_szid_5.append(rco_szid_5) #there is no scan zone of this type in this tier, doing it anyways
+ofl_szid_5.append(buf_szid_5) #there is no scan zone of this type in this tier, doing it anyways
+
+    # Scanzone_ID #6 totals
+ofl_szid_6.append(wlc_szid_6) #there is no scan zone of this type in this tier, doing it anyways
+ofl_szid_6.append(rco_szid_6) #there is no scan zone of this type in this tier, doing it anyways
+ofl_szid_6.append(buf_szid_6) #there is no scan zone of this type in this tier, doing it anyways
+
+    #Scanner Names, add up the list for the spreadsheet file
+ofl_scr.append(wlc_scr)
+ofl_scr.append(rco_scr)
+ofl_scr.append(buf_scr)
+
+    #ScanZoneName add up the list for the spreadsheet file
+ofl_scz.append(wlc_scz)
+ofl_scz.append(rco_scz)
+ofl_scz.append(buf_scz)
+
+    #Scan Zone ID #s, adding them all up for spreadsheet file.
+ofl_szid.append(wlc_szid)
+ofl_szid.append(rco_szid)
+ofl_szid.append(buf_szid)
+
+    #Scanner ID
+#    ofl_ids.append(wlc_ids) #Will this fix ofl_ids??????????????????????????????????????????????????
+#    ofl_ids.append(rco_ids)
+#    ofl_ids.append(buf_ids)
+
+ofl_ids = ofl_ids + rco_ids + buf_ids
+
+    # RCO has only 1 scan zone maximum per Scanner, OFL has 6 per scanner maximum, BUF has 1 per scanner maximum, WLC has 4 per scanner maximum
+    # Need to count how many scan zones per tier for
+# each to minimize this section
+    #Add up all the scan Zone IP Count #s, each ip
+    #RCO #1 Maximum Scan Zone Areas in this Tier
+rco_ip_List = get_scan_zone_IPs(rco_sc, rco_szid)
+rco_ip_List2 = get_scan_zone_IPs(rco_sc, rco_szid_2) #RCO only has 1 scan zone level active at the moment too much information?
+rco_ip_List3 = get_scan_zone_IPs(rco_sc, rco_szid_3)
+rco_ip_List4 = get_scan_zone_IPs(rco_sc, rco_szid_4)
+rco_ip_List5 = get_scan_zone_IPs(rco_sc, rco_szid_5)
+rco_ip_List6 = get_scan_zone_IPs(rco_sc, rco_szid_6)
+
+rco_ip_ListOriginal = rco_ip_List
+
+    #OFL #6 Maximum Scan Zone Areas in this Tier
+ofl_ip_List = get_scan_zone_IPs(ofl_sc, ofl_szid)
+ofl_ip_List2 = get_scan_zone_IPs(ofl_sc, ofl_szid_2)
+ofl_ip_List3 = get_scan_zone_IPs(ofl_sc, ofl_szid_3)
+ofl_ip_List4 = get_scan_zone_IPs(ofl_sc, ofl_szid_4)
+ofl_ip_List5 = get_scan_zone_IPs(ofl_sc, ofl_szid_5)
+ofl_ip_List6 = get_scan_zone_IPs(ofl_sc, ofl_szid_6)
+
+    #BUF #1 Maximum scan zone areas in this Tier
+buf_ip_List = get_scan_zone_IPs(buf_sc, buf_szid)
+buf_ip_List2 = get_scan_zone_IPs(buf_sc, buf_szid_2) #BUF  only has 1 scan zone level active at the moment
+buf_ip_List3 = get_scan_zone_IPs(buf_sc, buf_szid_3)
+buf_ip_List4 = get_scan_zone_IPs(buf_sc, buf_szid_4)
+buf_ip_List5 = get_scan_zone_IPs(buf_sc, buf_szid_5)
+buf_ip_List6 = get_scan_zone_IPs(buf_sc, buf_szid_6)
+
+    #WLC  #4 maximum scan zone areas in this Tier
+wlc_ip_List = get_scan_zone_IPs(wlc_sc, wlc_szid)
+wlc_ip_List2 = get_scan_zone_IPs(wlc_sc, wlc_szid_2)
+wlc_ip_List3 = get_scan_zone_IPs(wlc_sc, wlc_szid_3)
+wlc_ip_List4 = get_scan_zone_IPs(wlc_sc, wlc_szid_4)
+wlc_ip_List5 = get_scan_zone_IPs(wlc_sc, wlc_szid_5) #WLC  only has 4 scan zone active at the moment, too much information?
+wlc_ip_List6 = get_scan_zone_IPs(wlc_sc, wlc_szid_6)
+    #End of ip_scan zone IP counter
+
+container_variable = ofl_ip_List #this holds ofl_ip_list variable data to transform it into a list so you can allow append function.
+ofl_ip_List = [] #if you dont do this, it will crash with the append.
+#
+
+ofl_ip_ListCompare = ofl_ip_List
+buf_ip_ListCompare = buf_ip_List
+wlc_ip_ListCompare = wlc_ip_List
+rco_ip_ListCompare = rco_ip_List
+
+ofl_ip_List2Compare = ofl_ip_List2
+ofl_ip_List3Compare = ofl_ip_List3
+ofl_ip_List4Compare = ofl_ip_List4
+ofl_ip_List5Compare = ofl_ip_List5
+ofl_ip_List6Compare = ofl_ip_List6
+
+rco_ip_List2Compare = rco_ip_List2
+rco_ip_List3Compare = rco_ip_List3
+rco_ip_List4Compare = rco_ip_List4
+rco_ip_List5Compare = rco_ip_List5
+rco_ip_List6Compare = rco_ip_List6
+
+wlc_ip_List2Compare = wlc_ip_List2
+wlc_ip_List3Compare = wlc_ip_List3
+wlc_ip_List4Compare = wlc_ip_List4
+wlc_ip_List5Compare = wlc_ip_List5
+wlc_ip_List6Compare = wlc_ip_List6
+
+buf_ip_List2Compare = buf_ip_List2
+buf_ip_List3Compare = buf_ip_List3
+buf_ip_List4Compare = buf_ip_List4
+buf_ip_List5Compare = buf_ip_List5
+buf_ip_List6Compare = buf_ip_List6
+
+
+    #IP list add up the list for the spreadsheet file
+ofl_ip_List.append(container_variable)
+ofl_ip_List.append(wlc_ip_List)
+ofl_ip_List.append(rco_ip_List)
+ofl_ip_List.append(buf_ip_List)
+
+container_variable = ofl_ip_List2 #this holds ofl_ip_list2 variable data to transform it into a list so you can allow append function.
+ofl_ip_List2 = [] #if you dont do this, it will crash with the append.
+    #IP List level 2
+ofl_ip_List2.append(container_variable)
+ofl_ip_List2.append(wlc_ip_List2)
+ofl_ip_List2.append(rco_ip_List2)
+ofl_ip_List2.append(buf_ip_List2)
+
+container_variable = ofl_ip_List3 #this holds ofl_ip_list3 variable data to transform it into a list so you can allow append function.
+ofl_ip_List3 = [] #if you dont do this, it will crash with the append.
+    # IP List level 3
+ofl_ip_List3.append(wlc_ip_List3)
+ofl_ip_List3.append(rco_ip_List3)
+ofl_ip_List3.append(buf_ip_List3)
+
+
+container_variable = ofl_ip_List4 #this holds ofl_ip_list4 variable data to transform it into a list so you can allow append function.
+ofl_ip_List4 = [] #if you dont do this, it will crash with the append.
+    # IP List level 4
+ofl_ip_List4.append(wlc_ip_List4)
+ofl_ip_List4.append(rco_ip_List4)
+ofl_ip_List4.append(buf_ip_List4)
+
+container_variable = ofl_ip_List5 #This holds ofl_ip_list5 variable data to transform it into a list so you can allow append function.
+
+ofl_ip_List5 = [] #if you dont do this, it will crash with the append.
+    # IP List level 5
+ofl_ip_List5.append(wlc_ip_List5)
+ofl_ip_List5.append(rco_ip_List5)
+ofl_ip_List5.append(buf_ip_List5)
+
+container_variable = ofl_ip_List6 #this holds ofl_ip_list6 variable data to transform it into a list so you can allow append function.
+ofl_ip_List6 = [] #if you dont do this, it will crash with the append.
+    # IP List level 6
+ofl_ip_List6.append(wlc_ip_List6)
+ofl_ip_List6.append(rco_ip_List6)
+ofl_ip_List6.append(buf_ip_List6)
+
+ip_total = []
+
+    #Combiners Section puts the scan zone name with the Scan Zone ID# and the IP # Count in one field
+#Lets change this one.
+#ip_total = ip_combiner(ofl_ip_List, ofl_ip_List2, ofl_ip_List3, ofl_ip_List4, ofl_ip_List5, ofl_ip_List6) #this was crashing. Trying another way.
+
+ip_total.append(ofl_ip_List)
+ip_total.append(ofl_ip_List2)
+ip_total.append(ofl_ip_List3)
+ip_total.append(ofl_ip_List4)
+ip_total.append(ofl_ip_List5)
+ip_total.append(ofl_ip_List5)
+ip_total.append(ofl_ip_List6)
+ip_total.append(ofl_ip_List6)
+
+print(f"Line 377 ip_total, Right now is {ip_total}")
+
+    # Scan Zone ID #s, adding them all up for spreadsheet file.
+ofl_szid.append(wlc_szid)
+ofl_szid.append(rco_szid)
+ofl_szid.append(buf_szid)
+
+
+    # IP list add up the list for the spreadsheet file
+ofl_ip_List.append(wlc_ip_List)
+ofl_ip_List.append(rco_ip_List)
+ofl_ip_List.append(buf_ip_List)
+
+    # IP List level 2
+ofl_ip_List2.append(wlc_ip_List2)
+ofl_ip_List2.append(rco_ip_List2)
+ofl_ip_List2.append(buf_ip_List2)
+
+    # IP List level 3
+ofl_ip_List3.append(wlc_ip_List3)
+ofl_ip_List3.append(rco_ip_List3)
+ofl_ip_List3.append(buf_ip_List3)
+
+    # IP List level 4
+ofl_ip_List4.append(wlc_ip_List4)
+ofl_ip_List4.append(rco_ip_List4)
+ofl_ip_List4.append(buf_ip_List4)
+
+    # IP List level 5
+ofl_ip_List5.append(wlc_ip_List5)
+ofl_ip_List5.append(rco_ip_List5)
+ofl_ip_List5.append(buf_ip_List5)
+
+    # IP List level 6
+ofl_ip_List6.append(wlc_ip_List6)
+ofl_ip_List6.append(rco_ip_List6)
+ofl_ip_List6.append(buf_ip_List6)
+
+    # Combiners Section puts the scan zone name with the Scan Zone ID# and the IP # Count in one field
+
+#ip_total = ip_combiner(ofl_ip_List, ofl_ip_List2, ofl_ip_List3, ofl_ip_List4, ofl_ip_List5, ofl_ip_List6)
+ip_total.append(ofl_ip_List)
+ip_total.append(ofl_ip_List2)
+ip_total.append(ofl_ip_List3)
+ip_total.append(ofl_ip_List4)
+ip_total.append(ofl_ip_List5)
+ip_total.append(ofl_ip_List6)
+
+
+    # Combining the Scan Zone Area Names #BLAH HERE
+    # Level 1
+ofl_scz.append(wlc_scz)
+ofl_scz.append(rco_scz)
+ofl_scz.append(buf_scz)
+
+    # Level 2
+ofl_scz_2.append(wlc_scz_2)
+ofl_scz_2.append(rco_scz_2)
+ofl_scz_2.append(buf_scz_2)
+
+    # Level 3
+ofl_scz_3.append(wlc_scz_3)
+ofl_scz_3.append(rco_scz_3)
+ofl_scz_3.append(buf_scz_3)
+
+    # Level 4
+ofl_scz_4.append(wlc_scz_4)
+ofl_scz_4.append(rco_scz_4)
+ofl_scz_4.append(buf_scz_4)
+
+    # Level 5
+ofl_scz_5.append(wlc_scz_5)
+ofl_scz_5.append(rco_scz_5)
+ofl_scz_5.append(buf_scz_5)
+
+    # Level 6
+ofl_scz_6.append(wlc_scz_6)
+ofl_scz_6.append(rco_scz_6)
+ofl_scz_6.append(buf_scz_6)
+
+ofl_ids.append(wlc_ids)
+ofl_ids.append(rco_ids)
+ofl_ids.append(buf_ids)
+
+current_time = make_timestamp()
+
+ip_totalmod = ip_total
+with open('TenablesIP_Total_no modification.txt', 'w') as f:
+   for itemz in ip_total:
+       # write each item on a new line
+       f.write("%s\n" % itemz)
+
+ip_total4 = merge_the_list_of_lists(ip_total) #This did the best job with keeping the data and flattening a little of ip_total. There is still issue with it that you resolve later
+with open('TenablesIP_Total_ip_total4.txt', 'w') as f:
+   for itemz in ip_total4:
+       # write each item on a new line
+       f.write("%s\n" % itemz)
+
+length_newlist = len(newlist)
+length_ip_total = len(ip_total)
+
+file_object = open('CompareTwoFiles.txt', 'w')
+file_object.write(f"The length of newlist in InfoBlox is {length_newlist}  \n",)
+file_object.write(f"The length of ip_total in Tenables is {length_ip_total} \n")
+file_object.close()
+
+#This 2nd part below removes '' and empty lists
+with open("TenablesIP_Total_ip_total4.txt") as f:
+    lines = f.readlines()
+print("Done")
+print(lines)
+lines2 = []
+print(f"lines is the type of: ", type(lines))
+
+print(lines2)
+
+for i in lines:
+    lines2.append(i.strip()) #removing first and last characters
+
+print(f"lines2 = {lines2}")
+while '' in lines2:
+    lines2.remove('')
+
+lines = str(lines2)
+my_list = lines.split(",") #Your turning list of lists into elements you can use on my_list, my_list = tenable data
+
+with open('TenableFinalProduct.txt', 'w') as f:
+   for itemz in my_list:
+       # write each item on a new line
+       f.write("%s\n" % itemz)
+
+
+#Below this line is taking the data and comparing it towards both vendors IPAM list and finding unique CIDR notitation ranges and IP address network ranges
+print("Comparing Infoblox with Tenable.SC IPAM!")
+
+file1 = open('Infoblox_IPAM_CIDR_LIST.txt', 'r') #Final text file for InfoBlox
+infobloxline = file1.readlines()
+
+file2 = open('TenableFinalProduct.txt', 'r') #Almost Final text file for Tenable
+tLine = file2.readlines()
+
+
+tline_copy = tLine #making a copy of the original, to have something to delete elements without worrying about making mistake with orignal data
+a = tLine #this is what we will be playing with
+infobloxline_copy = infobloxline #Infoblox data
+b = infobloxline #Infoblox data
+
+file1.close() #closing the file
+file2.close() #closing the file
+
+for i in b: #comparing uniques
+    if i in a: #comparing uniques
+        print(f"Found match {i}") #Alerting to terminal if there is a match
+        b.remove(i) #remove the element if match found
+
+a2 = [sub[ : -1] for sub in a] #this removes the /n (return or newline symbol from every element in a list to a2
+b2 = [sub[ : -1] for sub in b] #this removes the /n (return or newline symbol from every element in b list to b2
+
+
+#Now we need to get rid of any duplicates in a2 & b2
+myTeblist = a2
+myTeblist = list(dict.fromkeys(myTeblist)) #This removes duplicates from list
+
+
+myInfolist = b2
+myInfolist = list(dict.fromkeys(myInfolist)) #This removes duplicates from list
+
+
+#assigning the datacenter data from tenable here, r
+
+myTeblist2 = myTeblist
+myTebList3 = myTeblist
+print(f"length of the myTeblist2 = {len(myTeblist2)}")
+x = 0
+
+rco_ip_ListL = len(rco_ip_ListOriginal)
+rco_ip_List2L = len(rco_ip_List2)
+rco_ip_List3L = len(rco_ip_List3)
+rco_ip_List4L = len(rco_ip_List4)
+rco_ip_List5L = len(rco_ip_List5)
+rco_ip_List6L = len(rco_ip_List6)
+
+ofl_ip_ListL = len(ofl_ip_List)
+ofl_ip_List2L = len(ofl_ip_List2)
+ofl_ip_List3L = len(ofl_ip_List3)
+ofl_ip_List4L = len(ofl_ip_List4)
+ofl_ip_List5L = len(ofl_ip_List5)
+ofl_ip_List6L = len(ofl_ip_List6)
+
+buf_ip_ListL = len(buf_ip_List)
+buf_ip_List2L = len(buf_ip_List2)
+buf_ip_List3L = len(buf_ip_List3)
+buf_ip_List4L = len(buf_ip_List4)
+buf_ip_List5L = len(buf_ip_List5)
+buf_ip_List6L = len(buf_ip_List6)
+
+wlc_ip_ListL = len(wlc_ip_List)
+wlc_ip_List2L = len(wlc_ip_List2)
+wlc_ip_List3L = len(wlc_ip_List3)
+wlc_ip_List4L = len(wlc_ip_List4)
+wlc_ip_List5L = len(wlc_ip_List5)
+wlc_ip_List6L = len(wlc_ip_List6)
+
+print(f"DEBUGGING PURPOSES")
+print("RCO AREA:")
+print(f"rco_ip_List = {rco_ip_ListOriginal}")
+print(f"rco_ip_List2 = {rco_ip_List2}")
+print(f"rco_ip_List3 = {rco_ip_List3}")
+print(f"rco_ip_List4 = {rco_ip_List4}")
+print(f"rco_ip_List5 = {rco_ip_List5}")
+print(f"rco_ip_List6 = {rco_ip_List6}")
+
+print("OFL AREA:")
+print(f"ofl_ip_List = {ofl_ip_List}")
+print(f"ofl_ip_List2 = {ofl_ip_List2}")
+print(f"ofl_ip_List3 = {ofl_ip_List3}")
+print(f"ofl_ip_List4 = {ofl_ip_List4}")
+print(f"ofl_ip_List5 = {ofl_ip_List5}")
+print(f"ofl_ip_List6 = {ofl_ip_List6}")
+
+print("BUFFALO AREA")
+print(f"buf_ip_List = {buf_ip_List}")
+print(f"buf_ip_List2 = {buf_ip_List2}")
+print(f"buf_ip_List3 = {buf_ip_List3}")
+print(f"buf_ip_List4 = {buf_ip_List4}")
+print(f"buf_ip_List5 = {buf_ip_List5}")
+print(f"buf_ip_List6 = {buf_ip_List6}")
+
+print("Welcare")
+print(f"wlc_ip_ListL = {wlc_ip_List}")
+print(f"wlc_ip_List2L = {wlc_ip_List2}")
+print(f"wlc_ip_List3L = {wlc_ip_List3}")
+print(f"wlc_ip_List4L = {wlc_ip_List4}")
+print(f"wlc_ip_List5L = {wlc_ip_List5}")
+print(f"wlc_ip_List6L = {wlc_ip_List6}")
+
+
+#did not work at all
+# x = 0
+# y = ofl_ip_ListL
+# y = y - 1
+# while y > 0:
+#     for z in myTeblist2[x]:
+#         print(f"x = {x}, y = {y}")
+#         if ofl_ip_List[y] == myTeblist2[x]:
+#             myTeblist2[x] += ' - OFL'
+#             print(f"OFL, match")
+#             print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+#         x += 1
+#     y -= 1
+
+
+for i in myTeblist2:
+    try:
+        if i in rco_ip_ListOriginal[x]:
+            myTeblist2[x] += ' - RCO'
+            print(f"RCO, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part of rco_ip_ListOriginal")
+
+    try:
+        if i in rco_ip_List2[x]:
+            myTeblist2[x] += ' - RCO'
+            print(f"RCO, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part of rco_ip_List2")
+
+    try:
+        if i in rco_ip_List3[x]:
+            myTeblist2[x] += ' - RCO'
+            print(f"RCO, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part of rco_ip_List3")
+
+    try:
+        if i in rco_ip_List4[x]:
+            myTeblist2[x] += ' - RCO'
+            print(f"RCO, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part of rco_ip_List4")
+
+    try:
+        if i in rco_ip_List5[x]:
+            myTeblist2[x] += ' - RCO'
+            print(f"RCO, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part of rco_ip_List5")
+
+    try:
+        if i in rco_ip_List6[x]:
+            myTeblist2[x] += ' - RCO'
+            print(f"RCO, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part of rco_ip_List6")
+
+
+    try:
+        if i in ofl_ip_List[x]:
+            myTeblist2[x] += ' - OFL'
+            print("OFL, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part of ofl_ip_List")
+
+    try:
+        if i in ofl_ip_List2[x]:
+            myTeblist2[x] += ' - OFL'
+            print("OFL, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in ofl_ip_List2")
+
+    try:
+        if i in ofl_ip_List3[x]:
+            myTeblist2[x] += ' - OFL'
+            print("OFL, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in ofl_ip_List3")
+
+    try:
+        if i in ofl_ip_List4[x]:
+            myTeblist2[x] += ' - OFL'
+            print("OFL, match")
+            print(f"myTeblist4[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in ofl_ip_List4")
+
+    try:
+        if i in ofl_ip_List5[x]:
+            myTeblist2[x] += ' - OFL'
+            print("OFL, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in ofl_ip_List5")
+
+    try:
+        if i in ofl_ip_List6[x]:
+            myTeblist[x] += ' - OFL'
+            print("OFL, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in ofl_ip_List6")
+
+    try:
+        if i in buf_ip_List[x]:
+            myTeblist2[x] += ' - BUF'
+            print("BUF, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in ofl_ip_List6")
+
+    try:
+        if i in buf_ip_list2[x]:
+            myTeblist2[x] += ' - BUF'
+            print("BUF, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in buf_ip_List2")
+
+    try:
+        if i in buf_ip_list3[x]:
+            myTeblist2[x] += ' - BUF'
+            print("BUF, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in buf_ip_List3")
+
+    try:
+        if i in buf_ip_list4[x]:
+            myTeblist2[x] += ' - BUF'
+            print("BUF, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in buf_ip_list4")
+
+    try:
+        if i in buf_ip_list5[x]:
+            myTeblist2[x] += ' - BUF'
+            print("BUF, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part in buf_ip_lis5")
+
+    try:
+        if i in buf_ip_list6[x]:
+            myTeblist2[x] += ' - BUF'
+            print("BUF, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part is being run in BUF_ip_list6")
+
+    try:
+        if i in wlc_ip_List[x]:
+            myTeblist2[x] += ' - WLC'
+            print("WLC, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part with wlc_ip_List")
+
+    try:
+        if i in wlc_ip_List2[x]:
+            myTeblist2[x] += ' - WLC'
+            print("WLC, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part with wlc_ip_List2")
+
+    try:
+        if i in wlc_ip_List3[x]:
+            myTeblist2[x] += ' - WLC'
+            print("WLC, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part with wlc_ip_List3")
+
+    try:
+        if i in wlc_ip_List4[x]:
+            myTeblist2[x] += ' - WLC'
+            print("WLC, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part with wlc_ip_List4")
+
+    try:
+        if i in wlc_ip_List5[x]:
+            myTeblist2[x] += ' - WLC'
+            print("WLC, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part with wlc_ip_List5")
+
+    try:
+        if i in wlc_ip_List6[x]:
+            myTeblist[x] += ' - WLC'
+            print("WLC, match")
+            print(f"myTeblist2[{x}] = {myTeblist2[x]}")
+    except:
+        print("except part is being run in wlc_ip_list6")
+
+    x = x + 1
+
+################################### End of experimental, remember to use myTebList2 or whatever variable to the write file line of code
+
+
+
+
+
+with open('TenablesUniqueIP_List.txt', 'w') as f: #we are writing the tenable data to hard drive
+   for teb in myTeblist2: #interating through a2
+       f.write("%s\n" % teb) #write each item on a new line
+
+with open('InfoBloxUniqueIP_List.txt', 'w') as f: #we are writing the Infoblox data to hard drive
+   for info in myInfolist: #interating through b2
+       f.write("%s\n" % info) #write each item on a new line
+
+print(f"Tenables Scan Zone Areas has these CIDR or IP addresses that Infoblox does not have: {myTeblist2}")
+#print(f"Infoblox IPAM has these CIDR or IP addresses that Tenables does not have: {myInfolist}")
+print(f"Tenables has this many unique address data points: {len(myTeblist)}") #Comparing the number of elements in Tenable list
+print(f"Infoblox has this many unique address data points: {len(myInfolist)}") #Comparing the number of elements in InfoBlox list
+current_time2 = make_timestamp()
+print(f"End of program. Program ended at: {current_time2}. Files InfoBloxUniqueIP_List.txt and TenablesUniqueIP_List.txt created! Enjoy the Files!")
+print("Program created text files called TenablesIP_Total.txt and Infoblox_IPAM_CIDR_LIST.txt. Have fun with it")
+print("End of Program")
